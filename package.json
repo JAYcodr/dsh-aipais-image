@@ -1,6 +1,6 @@
 {
   "name": "dsh-aipais-image",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "DSH 生图工具：通过 aipais.de 中转调用 gpt-image-2.6，一次工具调用完成生成（支持多提示词）+ 落盘 + 元数据账本 + 可粘贴 Markdown，并在会话里内联预览图片。",
   "type": "module",

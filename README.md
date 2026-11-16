@@ -35,9 +35,9 @@
 | `prompt` | string | 与 `prompts` 二选一 | 主体、场景、光线、媒介/画风；要画面文字就把文字逐字写进去并要求不得乱码 |
 | `prompts` | string[] | — | **一次给 1–10 条不同提示词，各出一张**；给了它就忽略 `n` |
 | `n` | 1–10 | `1` | 同一提示词的张数 |
-| `model` | string | `gpt-image-2.6-exact` | 见下方模型表；GIF/SVG 会**自动**切 `-media` |
+| `model` | string | `gpt-image-2.6`（快档，10–15s） | 见下方模型表；`size_tier` 给 2k/4k 时**自动**切 `-exact`（15–30s）；GIF/SVG 自动切 `-media` |
 | `aspect_ratio` | enum | `1:1` | `1:1` `16:9` `9:16` `2:3` `3:2` |
-| `size_tier` | enum | `1k` | `1k`（原生）/ `2k` / `4k`（只有 `-exact` 支持；2k/4k 是 1k 放大，细节不增加） |
+| `size_tier` | enum | `1k` | `1k`（原生）/ `2k` / `4k`（只有 `-exact` 支持；2k/4k 是 1k 放大，细节不增加；填 2k/4k 会自动切 `-exact`） |
 | `quality` | enum | `auto` | `auto` `low` `medium` `high`；追速度用 auto/low |
 | `output_format` | enum | `auto` | `png` `jpeg` `webp` `gif` `svg` `auto`（b64 默认 PNG） |
 | `reference_images` | string[] | — | 1–4 张参考图，给了就走 `/v1/images/edits`：锁角色、锁风格、改背景/表情 |
@@ -70,6 +70,14 @@
 > 2026-11-16 起，主机侧已按 `dsh-bili-scroll` 的现成范式实现入库：`ctx.get('attachments').saveImages([{ data, mediaType, name }])`。
 > 与 bili 唯一的差别：图片不塞成 image block 进结果内容，仍走 `presentationMeta`，所以**模型上下文零开销**，也不需要探 `inputModalities`。
 > 0.4.1 修掉了 0.4.0 里「看着有、其实没入库」的问题：之前用 `ctx.attachments.saveImage()`（单数），这版宿主上取不到；现在与 bili 一致走 `ctx.get('attachments')` + `saveImages()`。准入没成功的真实原因会写进结果（`附件：未入库（xxx）`），不再静默。
+
+## 0.4.2 新增
+
+| 变更 | 说明 |
+|---|---|
+| 默认模型换成快档 | 不传 `model` 时用 `gpt-image-2.6`（1k 原生，单张约 10–15s）；`size_tier` 给 `2k`/`4k` 才自动切 `-exact`（约 15–30s）。显式传 `model` 依旧优先 |
+| 账本记耗时 | sidecar 与 `index.jsonl` 新增 `elapsed_ms`（每个请求从发出到拿到图） |
+| `image_gen_info` 报实测 | 读本机账本，按模型给出平均 / 中位 / 最小 / 最大耗时与样本数——选模型看这台机器的真实数据，不看印象 |
 
 ## 模型与格式
 

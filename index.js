@@ -47,7 +47,7 @@ const GENERATE_SCHEMA = {
     n: { type: 'integer', minimum: 1, maximum: 10, description: '同一提示词的张数，默认 1。给了 prompts 时忽略。' },
     model: {
       type: 'string',
-      description: '模型，默认 gpt-image-2.6-exact（1k/2k/4k）。GIF/SVG 会自动切 gpt-image-2.6-media。其余可选：gpt-image-2.6、-flare、-sunburst。',
+      description: '模型。默认 gpt-image-2.6（1k，单张约 10–15s）；传 size_tier 2k/4k 会自动切 gpt-image-2.6-exact（约 15–30s）。GIF/SVG 自动切 gpt-image-2.6-media。风格化可选 -flare / -sunburst。',
     },
     aspect_ratio: {
       type: 'string',
@@ -209,7 +209,7 @@ function generateToolDefinition(config, admitImage) {
     description: [
       'Generate images with aipais gpt-image-2.6 (text-to-image, or reference-image edit when reference_images is given).',
       'One call covers: build request → generate → save into the workspace → return paths plus ready-to-paste Markdown.',
-      'Defaults are tuned for speed: gpt-image-2.6-exact, 1k, quality auto, aspect 1:1, PNG/auto format. Files go to <cwd>/generate/images unless save_dir says otherwise.',
+      'Defaults are tuned for speed: gpt-image-2.6 (1k native, ~10-15s per image), quality auto, aspect 1:1, PNG/auto format; size_tier 2k/4k switches to gpt-image-2.6-exact (~15-30s) automatically. Files go to <cwd>/generate/images unless save_dir says otherwise.',
       'For several different ideas in one call, pass prompts (array of 1-10) instead of n: same subject in different styles, four distinct concepts, or a full spread — one tool call, one inline card.',
       'Every image gets a JSON sidecar with its prompt, model and parameters, plus one line in <save_dir>/index.jsonl. Use that ledger when the user asks what an earlier image was made from.',
       'Requests are queued through a small concurrency gate (default 2) and a failed download is retried once, so parallel calls are safe.',
@@ -270,7 +270,7 @@ function generateToolDefinition(config, admitImage) {
           message,
           markdown: '',
           files: [],
-          model: String(args.model || 'gpt-image-2.6-exact'),
+          model: String(args.model || 'gpt-image-2.6'),
           elapsed_ms: 0,
           balance_after: -1,
         }
@@ -294,7 +294,7 @@ function infoToolDefinition(config) {
     },
     async execute(_rawArgs, exec) {
       try {
-        return await runInfo({}, { config, signal: exec?.signal })
+        return await runInfo({}, { config, signal: exec?.signal, cwd: sessionCwd(exec) })
       } catch (error) {
         return {
           ok: false,

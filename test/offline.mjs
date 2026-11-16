@@ -75,7 +75,7 @@ try {
   assert(existsSync(sidecar), 'sidecar 存在')
   const record = JSON.parse(readFileSync(sidecar, 'utf8'))
   assert(record.prompt === '同一只猫', 'sidecar 记下了 prompt')
-  assert(record.model === 'gpt-image-2.6-exact', 'sidecar 记下了模型')
+  assert(record.model === 'gpt-image-2.6', '默认走快档 gpt-image-2.6')
   assert(record.plugin.startsWith('dsh-aipais-image@'), 'sidecar 记下了插件版本')
   const indexLines = readFileSync(join(cwd, 'generate/images/index.jsonl'), 'utf8').trim().split('\n')
   assert(indexLines.length === 5, '账本累计 5 行（3 + 1 + 1）')
@@ -128,6 +128,16 @@ try {
     threw = String(error.message)
   }
   assert(threw !== null && threw.includes('prompt'), '两个都空时报可读错误')
+
+  console.log('模型路由：默认快档，2k/4k 切 exact，gif 切 media')
+  const fast = await runGenerate({ prompt: '快档', quality: 'low', filename_hint: 'fast' }, { cwd })
+  assert(fast.model === 'gpt-image-2.6', '默认 gpt-image-2.6')
+  const hi = await runGenerate({ prompt: '高清', size_tier: '4k', quality: 'low', filename_hint: 'hi' }, { cwd })
+  assert(hi.model === 'gpt-image-2.6-exact', '4k 自动切 exact')
+  const media = await runGenerate({ prompt: '动图', output_format: 'gif', quality: 'low', filename_hint: 'gif' }, { cwd })
+  assert(media.model === 'gpt-image-2.6-media', 'gif 自动切 media')
+  const forced = await runGenerate({ prompt: '指定', model: 'gpt-image-2.6-flare', quality: 'low', filename_hint: 'forced' }, { cwd })
+  assert(forced.model === 'gpt-image-2.6-flare', '显式 model 优先')
 
   console.log('格式识别')
   assert(sniffFormat(Buffer.from(PNG_B64, 'base64')) === 'png', 'PNG 魔数')

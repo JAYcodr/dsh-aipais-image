@@ -9,7 +9,7 @@
  * 因此 link 安装进 profile 后无需额外依赖即可解析。
  */
 
-import { runGenerate, runInfo } from './lib/core.js'
+import { PLUGIN_VERSION, runGenerate, runInfo } from './lib/core.js'
 
 /** Cordis 插件名（与包名一致，Loader 按此解析）。 */
 export const name = 'dsh-aipais-image'
@@ -31,13 +31,20 @@ function normalizeArgs(raw) {
 const GENERATE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['prompt'],
   properties: {
     prompt: {
       type: 'string',
-      description: '提示词。写清主体、场景、光线、媒介/画风；需要画面文字时把文字逐字写进 prompt 并要求不得乱码。',
+      description: '单条提示词（与 prompts 二选一）。写清主体、场景、光线、媒介/画风；需要画面文字时把文字逐字写进 prompt 并要求不得乱码。',
     },
-    n: { type: 'integer', minimum: 1, maximum: 10, description: '生成张数，默认 1。一次调用最多 10 张。' },
+    prompts: {
+      type: 'array',
+      items: { type: 'string' },
+      minItems: 1,
+      maxItems: 10,
+      description:
+        '一次给多条不同提示词，各出一张（最多 10 条）。想一句话出四种不同方向、或一次填满整块版面时用它；与 prompt 二选一，忽略 n。',
+    },
+    n: { type: 'integer', minimum: 1, maximum: 10, description: '同一提示词的张数，默认 1。给了 prompts 时忽略。' },
     model: {
       type: 'string',
       description: '模型，默认 gpt-image-2.6-exact（1k/2k/4k）。GIF/SVG 会自动切 gpt-image-2.6-media。其余可选：gpt-image-2.6、-flare、-sunburst。',
@@ -102,6 +109,7 @@ const GENERATE_OUTPUT = {
           bytes: { type: 'number' },
           width: { type: 'number' },
           height: { type: 'number' },
+          prompt: { type: 'string', description: '这一张用的是哪条提示词（多提示词时用于区分）。' },
         },
       },
     },
@@ -155,9 +163,10 @@ function generateToolDefinition(config) {
       'Generate images with aipais gpt-image-2.6 (text-to-image, or reference-image edit when reference_images is given).',
       'One call covers: build request → generate → save into the workspace → return paths plus ready-to-paste Markdown.',
       'Defaults are tuned for speed: gpt-image-2.6-exact, 1k, quality auto, aspect 1:1, PNG/auto format. Files go to <cwd>/generate/images unless save_dir says otherwise.',
-      'Use it for anything visual: fun/creative sets, article illustrations, posters, stickers, backgrounds, character sheets, and reference-image edits for character consistency.',
-      'Efficiency rules for casual "make some fun images" requests: just invent the ideas, call this tool (one call can do n images), and show the returned markdown. Do NOT read the images back one by one to check them — image2.6 is stable and a QA loop only wastes time. Inspect only when the user explicitly asks, or when the tool reports a failure.',
-      'Typical creative request: a few distinct ideas, different media/styles, consistent with the user taste; batch them in 1–3 calls, then present.',
+      'For several different ideas in one call, pass prompts (array of 1-10) instead of n: same subject in different styles, four distinct concepts, or a full spread — one tool call, one inline card.',
+      'Every image gets a JSON sidecar with its prompt, model and parameters, plus one line in <save_dir>/index.jsonl. Use that ledger when the user asks what an earlier image was made from.',
+      'Requests are queued through a small concurrency gate (default 2) and a failed download is retried once, so parallel calls are safe.',
+      'Efficiency rules for casual "make some fun images" requests: just invent the ideas, call this tool (one call, several prompts), and show the returned markdown. Do NOT read the images back one by one to check them — image2.6 is stable and a QA loop only wastes time. Inspect only when the user explicitly asks, or when the tool reports a failure.',
     ].join(' '),
     parameters: GENERATE_SCHEMA,
     output: {
@@ -168,6 +177,7 @@ function generateToolDefinition(config) {
        */
       presentationMeta: (_args, value) => ({
         card: 'aipais-image',
+        version: PLUGIN_VERSION,
         model: String(value?.model || ''),
         elapsed_ms: Number(value?.elapsed_ms) || 0,
         balance_after: Number(value?.balance_after ?? -1),
@@ -178,6 +188,7 @@ function generateToolDefinition(config) {
           bytes: Number(file?.bytes) || 0,
           width: Number(file?.width) || 0,
           height: Number(file?.height) || 0,
+          prompt: String(file?.prompt || ''),
         })),
       }),
       render: (_args, value) => {
@@ -215,7 +226,7 @@ function infoToolDefinition(config) {
   return {
     name: 'image_gen_info',
     description: [
-      'Check the aipais image relay: remaining credits, available models with size tiers, and the capability table (aspect ratios, output formats, gif/svg notes, reference edits, price).',
+      'Check the aipais image relay: remaining credits, available models with size tiers, and the capability table (aspect ratios, output formats, gif/svg notes, reference edits, multi-prompt, price).',
       'Free to call (no image is generated). Use it when the user asks what the image tool can do, which formats are supported, or how much credit is left.',
     ].join(' '),
     parameters: INFO_SCHEMA,

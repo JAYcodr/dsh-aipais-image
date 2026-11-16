@@ -1,8 +1,8 @@
 {
   "name": "dsh-aipais-image",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "DSH 生图工具：通过 aipais.de 中转调用 gpt-image-2.6，一条工具调用完成生成 + 落盘 + 返回可粘贴的 Markdown，并在会话里内联预览图片。",
+  "description": "DSH 生图工具：通过 aipais.de 中转调用 gpt-image-2.6，一次工具调用完成生成（支持多提示词）+ 落盘 + 元数据账本 + 可粘贴 Markdown，并在会话里内联预览图片。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -18,6 +18,10 @@
     "INSTALL.md",
     "selftest.mjs"
   ],
+  "scripts": {
+    "test": "node test/offline.mjs",
+    "selftest": "node selftest.mjs --info"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

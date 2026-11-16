@@ -94,7 +94,7 @@ try {
       cwd,
       admitImage: async ({ buffer, mediaType, name }) => {
         admitted.push({ mediaType, name, bytes: buffer.length })
-        return { attachmentId: 'att_' + admitted.length, mediaType, bytes: buffer.length, width: 1, height: 1, name }
+        return { ref: { attachmentId: 'att_' + admitted.length, mediaType, bytes: buffer.length, width: 1, height: 1, name } }
       },
     },
   )
@@ -107,10 +107,16 @@ try {
   console.log('准入失败只降级，不出图失败')
   const degraded = await runGenerate(
     { prompt: '准入会炸的图', quality: 'low', filename_hint: 'degraded' },
-    { cwd, admitImage: async () => { throw new Error('quota exceeded') } },
+    { cwd, admitImage: async () => ({ reason: '服务不可用' }) },
   )
   assert(degraded.files.length === 1, '照常出图')
   assert(degraded.files[0].attachment === undefined, '没有附件字段')
+  assert(degraded.message.includes('未入库'), '结果里写明为什么没入库')
+  const thrown = await runGenerate(
+    { prompt: '准入会抛错的图', quality: 'low', filename_hint: 'thrown' },
+    { cwd, admitImage: async () => { throw new Error('quota exceeded') } },
+  )
+  assert(thrown.files.length === 1 && thrown.message.includes('quota exceeded'), '抛错也只降级并记录原因')
 
   console.log('边界：prompts 压过 n、两个都没给要报错')
   const override = await runGenerate({ prompts: ['甲', '乙'], n: 5, quality: 'low', filename_hint: 'override' }, { cwd })

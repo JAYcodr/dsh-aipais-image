@@ -67,7 +67,9 @@
 | 向后兼容 | 没有附件的老结果 → 照旧退回 `/api/file`；连 `meta` 都没有的更老结果 → 解析 Markdown 图片 |
 | 优雅降级 | 附件服务缺席（自定义组合没挂 `attachment-local`）或准入被拒（超限/格式不支持）时只跳过附件，出图不受影响 |
 
-> 2026-11-16 起，主机侧已按 `dsh-bili-scroll` 的现成范式实现入库；图片不做「塞成 image block 进结果内容」，仍走 `presentationMeta`，所以**模型上下文零开销**，也不需要探 `inputModalities`。
+> 2026-11-16 起，主机侧已按 `dsh-bili-scroll` 的现成范式实现入库：`ctx.get('attachments').saveImages([{ data, mediaType, name }])`。
+> 与 bili 唯一的差别：图片不塞成 image block 进结果内容，仍走 `presentationMeta`，所以**模型上下文零开销**，也不需要探 `inputModalities`。
+> 0.4.1 修掉了 0.4.0 里「看着有、其实没入库」的问题：之前用 `ctx.attachments.saveImage()`（单数），这版宿主上取不到；现在与 bili 一致走 `ctx.get('attachments')` + `saveImages()`。准入没成功的真实原因会写进结果（`附件：未入库（xxx）`），不再静默。
 
 ## 模型与格式
 

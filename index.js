@@ -174,16 +174,31 @@ function sessionCwd(exec) {
  * 服务缺席（自定义组合没挂 attachment-local）时安静降级，不影响出图。
  */
 function admissionOf(ctx) {
+  // 与 dsh-bili-scroll 同一套取法：运行时 ctx.get('attachments') + saveImages()。
+  const service = () => {
+    const scoped = typeof ctx?.get === 'function' ? ctx.get('attachments') : undefined
+    return scoped ?? ctx?.attachments
+  }
   return async ({ buffer, mediaType, name }) => {
-    // 运行时再取服务：附件插件可能比本插件晚加载。
-    const service = ctx?.attachments ?? (typeof ctx?.get === 'function' ? ctx.get('attachments') : undefined)
-    if (!service || typeof service.saveImage !== 'function') return null
-    const ref = await service.saveImage({
-      data: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
-      mediaType,
-      name,
-    })
-    return ref ?? null
+    const attachments = service()
+    if (!attachments) return { reason: '附件服务不可用（ctx.get("attachments") 为空）' }
+    const data = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+    try {
+      if (typeof attachments.saveImages === 'function') {
+        const refs = await attachments.saveImages([{ data, mediaType, name }])
+        const ref = Array.isArray(refs) ? refs[0] : refs
+        if (ref?.attachmentId) return { ref }
+        return { reason: 'saveImages 没有返回引用' }
+      }
+      if (typeof attachments.saveImage === 'function') {
+        const ref = await attachments.saveImage({ data, mediaType, name })
+        if (ref?.attachmentId) return { ref }
+        return { reason: 'saveImage 没有返回引用' }
+      }
+      return { reason: '附件服务上没有 saveImages / saveImage' }
+    } catch (error) {
+      return { reason: '入库失败：' + String(error?.message || error) }
+    }
   }
 }
 

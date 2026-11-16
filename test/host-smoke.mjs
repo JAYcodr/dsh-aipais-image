@@ -2,18 +2,20 @@ import { createHash } from 'node:crypto'
 import { apply } from '../index.js'
 
 const registered = {}
+const attachments = {
+  saveImages: async (inputs) => inputs.map(({ data, mediaType, name }) => ({
+    attachmentId: 'att_' + createHash('sha256').update(Buffer.from(data)).digest('hex').slice(0, 16),
+    mediaType,
+    bytes: data.length,
+    width: 1254,
+    height: 1254,
+    name,
+  })),
+}
 const ctx = {
   tools: { register: (def) => { registered[def.name] = def } },
-  attachments: {
-    saveImage: async ({ data, mediaType, name }) => ({
-      attachmentId: 'att_' + createHash('sha256').update(Buffer.from(data)).digest('hex').slice(0, 16),
-      mediaType,
-      bytes: data.length,
-      width: 1254,
-      height: 1254,
-      name,
-    }),
-  },
+  attachments,
+  get: (name) => (name === 'attachments' ? attachments : undefined),
 }
 apply(ctx, {})
 

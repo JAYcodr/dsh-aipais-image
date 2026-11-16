@@ -86,6 +86,17 @@ try {
   const retried = await runGenerate({ prompt: '下载会失败一次', quality: 'low', filename_hint: 'retry' }, { cwd })
   assert(retried.files.length === 1, '重试后拿到图')
 
+  console.log('边界：prompts 压过 n、两个都没给要报错')
+  const override = await runGenerate({ prompts: ['甲', '乙'], n: 5, quality: 'low', filename_hint: 'override' }, { cwd })
+  assert(override.files.length === 2, 'prompts 优先，n 被忽略')
+  let threw = null
+  try {
+    await runGenerate({ quality: 'low' }, { cwd })
+  } catch (error) {
+    threw = String(error.message)
+  }
+  assert(threw !== null && threw.includes('prompt'), '两个都空时报可读错误')
+
   console.log('格式识别')
   assert(sniffFormat(Buffer.from(PNG_B64, 'base64')) === 'png', 'PNG 魔数')
   assert(sniffFormat(Buffer.from('GIF89a.......', 'latin1')) === 'gif', 'GIF 魔数')

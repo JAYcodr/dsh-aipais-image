@@ -86,6 +86,32 @@ try {
   const retried = await runGenerate({ prompt: '下载会失败一次', quality: 'low', filename_hint: 'retry' }, { cwd })
   assert(retried.files.length === 1, '重试后拿到图')
 
+  console.log('会话附件准入')
+  const admitted = []
+  const withAttachment = await runGenerate(
+    { prompt: '带附件的图', quality: 'low', filename_hint: 'attached' },
+    {
+      cwd,
+      admitImage: async ({ buffer, mediaType, name }) => {
+        admitted.push({ mediaType, name, bytes: buffer.length })
+        return { attachmentId: 'att_' + admitted.length, mediaType, bytes: buffer.length, width: 1, height: 1, name }
+      },
+    },
+  )
+  assert(admitted.length === 1, '准入被调用一次')
+  assert(admitted[0].mediaType === 'image/png', 'mediaType 按真实魔数给')
+  assert(withAttachment.files[0].attachment?.attachmentId === 'att_1', '结果带回附件引用')
+  const attachedSidecar = withAttachment.files[0].absolute_path.replace(/\.[a-z0-9]+$/i, '.json')
+  assert(JSON.parse(readFileSync(attachedSidecar, 'utf8')).attachment_id === 'att_1', 'sidecar 记下附件 id')
+
+  console.log('准入失败只降级，不出图失败')
+  const degraded = await runGenerate(
+    { prompt: '准入会炸的图', quality: 'low', filename_hint: 'degraded' },
+    { cwd, admitImage: async () => { throw new Error('quota exceeded') } },
+  )
+  assert(degraded.files.length === 1, '照常出图')
+  assert(degraded.files[0].attachment === undefined, '没有附件字段')
+
   console.log('边界：prompts 压过 n、两个都没给要报错')
   const override = await runGenerate({ prompts: ['甲', '乙'], n: 5, quality: 'low', filename_hint: 'override' }, { cwd })
   assert(override.files.length === 2, 'prompts 优先，n 被忽略')

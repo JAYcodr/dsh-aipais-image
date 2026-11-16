@@ -57,6 +57,18 @@
 | 图片卡 | 超过 6 张可「展开全部」；大图支持 `←`/`→` 翻页、显示页码与这张的 prompt |
 | 测试 | `node test/offline.mjs`：桩掉 fetch，验证多提示词、防覆盖、元数据、重试，不花钱 |
 
+## 0.4.0 新增
+
+| 变更 | 说明 |
+|---|---|
+| 会话附件 | 生成完顺手调用 `ctx.attachments.saveImage()`，把字节再存一份进 DSH 附件存储，拿到持久引用 `{ attachmentId, mediaType, bytes, width, height }` |
+| 走官方鉴权 loader | 卡片的 `<img>` 不再拼 `/api/file?path=`，而是用 toolview owner 给的 `loadImage(ref)`（Gateway 鉴权、带 `peek` 同步缓存）——**桌面端也能看图** |
+| 图不再依赖工作区 | 工作区文件被删/挪，会话里的图还在；卡片头上有「会话附件」徽标 |
+| 向后兼容 | 没有附件的老结果 → 照旧退回 `/api/file`；连 `meta` 都没有的更老结果 → 解析 Markdown 图片 |
+| 优雅降级 | 附件服务缺席（自定义组合没挂 `attachment-local`）或准入被拒（超限/格式不支持）时只跳过附件，出图不受影响 |
+
+> 2026-11-16 起，主机侧已按 `dsh-bili-scroll` 的现成范式实现入库；图片不做「塞成 image block 进结果内容」，仍走 `presentationMeta`，所以**模型上下文零开销**，也不需要探 `inputModalities`。
+
 ## 模型与格式
 
 | 模型 | 尺寸档 | 用途 |
@@ -121,14 +133,20 @@ env 文件格式：`export AIPAIS_KEY=sk-...`。
 | 半边 | 文件 | 做什么 |
 |---|---|---|
 | 宿主 | [`index.js`](index.js) `output.presentationMeta` | 把 `files[]` 投影成 `{ images: [{ path, absolute_path, width, height, bytes, prompt }] }` 写进 `tools/result.meta`。**只给界面看，不进模型上下文**，不额外烧 token |
-| 浏览器 | [`lib/client.js`](lib/client.js) | 手写客户端 bundle（`window.__ModuleLoader__.load`），注册 `tool.call.toolview` 的 `generate_image` 视图；图片走 DSH 自带的鉴权路由 `GET /api/file?path=<绝对路径>`（和 Markdown 图片同一条） |
+| 浏览器 | [`lib/client.js`](lib/client.js) | 手写客户端 bundle（`window.__ModuleLoader__.load`），注册 `tool.call.toolview` 的 `generate_image` 视图 |
 
-老会话没有 `meta` 时，卡片会退回解析结果文本里的 `![alt](<路径>)`，相对路径按会话 cwd 解析。
+图片地址有三条路，按优先级：
+
+1. **会话附件**（0.4.0）：`meta.images[].attachment` 有引用 → 用 owner 的 `loadImage(attachment)`（先试 `peek()` 同步缓存），Gateway 鉴权、桌面端也支持；
+2. **工作区文件**：没有附件但有路径 → `GET /api/file?path=<绝对路径>`（仅 http(s) 页面）；
+3. **纯文本 Markdown**：连 `meta` 都没有的更老会话 → 解析结果文本里的 `![alt](<路径>)`。
+
+超时/失败都会降级成「无法预览：路径」，不会白屏。
 
 要求：
 
-- 页面必须是 **http(s)**（Web GUI 满足；桌面端 `dsh-app:` 页面不支持本地文件路由，那时卡片会显示"无法预览"而不是白屏）。
 - 改了 `lib/client.js` 之后要重启/重载插件 entry 并刷新页面，客户端模块图才会换到新 bundle。
+- 附件那条路要求 profile 里挂着 `@deepseek-ai/dsh-attachment-local`（随附 base 组合自带）；没有时自动退回第 2 条。
 
 ## 用法建议（写给 agent）
 
@@ -149,7 +167,9 @@ env 文件格式：`export AIPAIS_KEY=sk-...`。
 | 图片拿到了但下载失败 | 已在优先 `b64_json`，并自动重试一次；还失败就重新生成 |
 | 两张图名字撞了 / 后一张吃掉前一张 | 0.3.0 已修：同秒同名会加 `-2`/`-3` 后缀；还看到就检查是不是装了旧版 |
 | 上游偶发 502 / 直链被墙 | 工具自带重试；持续失败就重新生成（别复用坏链接） |
-| 工具行还是纯文本、没有缩略图 | ① 刷新页面（`Cmd+R`）；② 设置 → 插件里确认 `aipais-image` 是启用状态；③ 桌面端 `dsh-app:` 页面不支持本地图片路由，用 Web GUI 打开 |
+| 工具行还是纯文本、没有缩略图 | ① 刷新页面（`Cmd+R`）；② 设置 → 插件里确认 `aipais-image` 是启用状态；③ 刚升级到 0.4.0 的话要重启插件 entry（客户端 bundle 换了） |
+| 桌面端图片显示「无法预览」 | 0.4.0 起新生成的图走会话附件，桌面端也能看；老会话/老结果仍走 `/api/file`，那条路只有 http(s) 页面支持 |
+| 卡片上没有「会话附件」徽标 | 说明附件准入没成功：检查 profile 里有没有 `@deepseek-ai/dsh-attachment-local`，或看后端日志里的拒绝原因（超限/格式） |
 
 ## 开发自检
 
@@ -158,4 +178,5 @@ node selftest.mjs          # 查信息 + 生成 1 张最小图（约 0.009 credi
 node selftest.mjs --info   # 只查信息，不花钱
 node selftest.mjs --multi  # 2 条不同提示词，验证多提示词链路（约 0.018 credits）
 node test/offline.mjs      # 离线测试：桩掉 fetch，不花钱、不联网
+node test/host-smoke.mjs   # 宿主侧冒烟：假 ctx + 真 API，验证附件引用进 meta（约 0.009 credits）
 ```

@@ -110,6 +110,20 @@ const GENERATE_OUTPUT = {
           width: { type: 'number' },
           height: { type: 'number' },
           prompt: { type: 'string', description: '这一张用的是哪条提示词（多提示词时用于区分）。' },
+          attachment: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['attachmentId', 'mediaType', 'bytes', 'width', 'height'],
+            description: '会话附件引用（持久，重开会话仍在）。准入失败时缺省。',
+            properties: {
+              attachmentId: { type: 'string' },
+              mediaType: { type: 'string' },
+              bytes: { type: 'number' },
+              width: { type: 'number' },
+              height: { type: 'number' },
+              name: { type: 'string' },
+            },
+          },
         },
       },
     },
@@ -155,8 +169,26 @@ function sessionCwd(exec) {
   )
 }
 
+/**
+ * 会话附件准入：把生成好的字节存进 DSH 的附件存储，拿到持久引用。
+ * 服务缺席（自定义组合没挂 attachment-local）时安静降级，不影响出图。
+ */
+function admissionOf(ctx) {
+  return async ({ buffer, mediaType, name }) => {
+    // 运行时再取服务：附件插件可能比本插件晚加载。
+    const service = ctx?.attachments ?? (typeof ctx?.get === 'function' ? ctx.get('attachments') : undefined)
+    if (!service || typeof service.saveImage !== 'function') return null
+    const ref = await service.saveImage({
+      data: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
+      mediaType,
+      name,
+    })
+    return ref ?? null
+  }
+}
+
 /** 生成工具定义。 */
-function generateToolDefinition(config) {
+function generateToolDefinition(config, admitImage) {
   return {
     name: 'generate_image',
     description: [
@@ -189,6 +221,16 @@ function generateToolDefinition(config) {
           width: Number(file?.width) || 0,
           height: Number(file?.height) || 0,
           prompt: String(file?.prompt || ''),
+          attachment: file?.attachment && typeof file.attachment === 'object'
+            ? {
+                attachmentId: String(file.attachment.attachmentId || ''),
+                mediaType: String(file.attachment.mediaType || ''),
+                bytes: Number(file.attachment.bytes) || 0,
+                width: Number(file.attachment.width) || 0,
+                height: Number(file.attachment.height) || 0,
+                ...(file.attachment.name ? { name: String(file.attachment.name) } : {}),
+              }
+            : null,
         })),
       }),
       render: (_args, value) => {
@@ -204,6 +246,7 @@ function generateToolDefinition(config) {
           cwd: sessionCwd(exec),
           config,
           signal: exec?.signal,
+          admitImage,
         })
       } catch (error) {
         const message = `❌ 出图失败：${error?.message || error}`
@@ -266,6 +309,6 @@ export function apply(ctx, config = {}) {
       console.warn(`[dsh-aipais-image] failed to register ${definition.name}:`, error)
     }
   }
-  register(generateToolDefinition(config))
+  register(generateToolDefinition(config, admissionOf(ctx)))
   register(infoToolDefinition(config))
 }

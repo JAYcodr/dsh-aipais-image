@@ -1,0 +1,6 @@
+# 只往配置树里加这一行，不覆盖任何自带组件。
+# id 唯一；name 必须与 package.json 的包名一致，Loader 才解析得到入口。
+- insert:
+    - id: aipais-image
+      name: dsh-aipais-image
+      config: {}

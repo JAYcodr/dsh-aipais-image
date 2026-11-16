@@ -1,0 +1,260 @@
+/**
+ * dsh-aipais-image —— 把「想点子 → 填表 → 出图」压成一次工具调用的宿主插件。
+ *
+ * 注册两个工具：
+ *  - generate_image  生成/编辑，落盘到工作区，返回可直接粘贴的 Markdown
+ *  - image_gen_info  查余额、模型与能力表（不花钱）
+ *
+ * 只依赖 node 内置能力与 ./lib/core.js，不 import @deepseek-ai/*，
+ * 因此 link 安装进 profile 后无需额外依赖即可解析。
+ */
+
+import { runGenerate, runInfo } from './lib/core.js'
+
+/** Cordis 插件名（与包名一致，Loader 按此解析）。 */
+export const name = 'dsh-aipais-image'
+
+/** 需要的服务：工具注册表。 */
+export const inject = ['tools']
+
+/** 模型给出的参数已由注册表校验，这里再兜一层运行期默认值。 */
+function unref(value) {
+  return value && typeof value === 'object' && 'value' in value ? value.value : value
+}
+
+function normalizeArgs(raw) {
+  const args = {}
+  for (const [key, value] of Object.entries(unref(raw) || {})) args[key] = unref(value)
+  return args
+}
+
+const GENERATE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['prompt'],
+  properties: {
+    prompt: {
+      type: 'string',
+      description: '提示词。写清主体、场景、光线、媒介/画风；需要画面文字时把文字逐字写进 prompt 并要求不得乱码。',
+    },
+    n: { type: 'integer', minimum: 1, maximum: 10, description: '生成张数，默认 1。一次调用最多 10 张。' },
+    model: {
+      type: 'string',
+      description: '模型，默认 gpt-image-2.6-exact（1k/2k/4k）。GIF/SVG 会自动切 gpt-image-2.6-media。其余可选：gpt-image-2.6、-flare、-sunburst。',
+    },
+    aspect_ratio: {
+      type: 'string',
+      enum: ['1:1', '16:9', '9:16', '2:3', '3:2'],
+      description: '宽高比，默认 1:1。海报用 2:3/9:16，风景用 16:9。',
+    },
+    size_tier: {
+      type: 'string',
+      enum: ['1k', '2k', '4k'],
+      description: '清晰度档，默认 1k（原生分辨率）。只有 -exact 支持 2k/4k，但 2k/4k 只是 1k 放大，细节不增加。',
+    },
+    quality: {
+      type: 'string',
+      enum: ['auto', 'low', 'medium', 'high'],
+      description: '画质，默认 auto。追求速度用 auto/low，追求细节用 high。',
+    },
+    output_format: {
+      type: 'string',
+      enum: ['png', 'jpeg', 'webp', 'gif', 'svg', 'auto'],
+      description: '格式，默认 auto（b64 一般返回 PNG）。gif 出约 410px 循环动图；svg 需上游原生矢量。',
+    },
+    reference_images: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '参考图路径（绝对路径或相对当前工作目录），1–4 张。给了就走 /v1/images/edits：锁角色、锁风格、改背景/表情。参考图必须是目标角色/目标风格本身。',
+    },
+    save_dir: {
+      type: 'string',
+      description: '保存目录，默认 generate/images（相对当前工作目录）。',
+    },
+    filename_hint: {
+      type: 'string',
+      description: '文件名提示（可选），默认从 prompt 提取。',
+    },
+  },
+}
+
+const GENERATE_OUTPUT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ok', 'message', 'markdown', 'files'],
+  properties: {
+    ok: { type: 'boolean' },
+    message: { type: 'string', description: '人类可读的结果摘要。' },
+    markdown: { type: 'string', description: '可直接粘进回复的 Markdown 图片块。' },
+    model: { type: 'string' },
+    elapsed_ms: { type: 'number' },
+    balance_after: { type: 'number', description: '调用后余额（credits），查询失败为 -1。' },
+    files: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['path', 'absolute_path', 'format', 'bytes'],
+        properties: {
+          path: { type: 'string', description: '相对工作区（或绝对）路径，用于 Markdown 引用。' },
+          absolute_path: { type: 'string' },
+          format: { type: 'string' },
+          bytes: { type: 'number' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+        },
+      },
+    },
+  },
+}
+
+const INFO_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {},
+}
+
+const INFO_OUTPUT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ok', 'message', 'balance', 'models'],
+  properties: {
+    ok: { type: 'boolean' },
+    message: { type: 'string' },
+    balance: { type: 'number', description: '余额（credits），查询失败为 -1。' },
+    models: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id'],
+        properties: {
+          id: { type: 'string' },
+          size_tiers: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+}
+
+function sessionCwd(exec) {
+  const session = exec?.agent?.session
+  return (
+    session?.header?.cwd ||
+    session?.cwd ||
+    exec?.agent?.cwd ||
+    process.cwd()
+  )
+}
+
+/** 生成工具定义。 */
+function generateToolDefinition(config) {
+  return {
+    name: 'generate_image',
+    description: [
+      'Generate images with aipais gpt-image-2.6 (text-to-image, or reference-image edit when reference_images is given).',
+      'One call covers: build request → generate → save into the workspace → return paths plus ready-to-paste Markdown.',
+      'Defaults are tuned for speed: gpt-image-2.6-exact, 1k, quality auto, aspect 1:1, PNG/auto format. Files go to <cwd>/generate/images unless save_dir says otherwise.',
+      'Use it for anything visual: fun/creative sets, article illustrations, posters, stickers, backgrounds, character sheets, and reference-image edits for character consistency.',
+      'Efficiency rules for casual "make some fun images" requests: just invent the ideas, call this tool (one call can do n images), and show the returned markdown. Do NOT read the images back one by one to check them — image2.6 is stable and a QA loop only wastes time. Inspect only when the user explicitly asks, or when the tool reports a failure.',
+      'Typical creative request: a few distinct ideas, different media/styles, consistent with the user taste; batch them in 1–3 calls, then present.',
+    ].join(' '),
+    parameters: GENERATE_SCHEMA,
+    output: {
+      schema: GENERATE_OUTPUT,
+      /**
+       * 只给界面用的投影（不进模型上下文）：客户端读它渲染会话内联图片卡。
+       * 老会话没有 meta 时，客户端会退回解析 render 出来的 Markdown。
+       */
+      presentationMeta: (_args, value) => ({
+        card: 'aipais-image',
+        model: String(value?.model || ''),
+        elapsed_ms: Number(value?.elapsed_ms) || 0,
+        balance_after: Number(value?.balance_after ?? -1),
+        images: (Array.isArray(value?.files) ? value.files : []).map((file) => ({
+          path: String(file?.path || ''),
+          absolute_path: String(file?.absolute_path || ''),
+          format: String(file?.format || ''),
+          bytes: Number(file?.bytes) || 0,
+          width: Number(file?.width) || 0,
+          height: Number(file?.height) || 0,
+        })),
+      }),
+      render: (_args, value) => {
+        const message = String(value?.message || '')
+        const markdown = String(value?.markdown || '')
+        return [{ type: 'text', text: markdown ? `${message}\n\n${markdown}` : message }]
+      },
+    },
+    async execute(rawArgs, exec) {
+      const args = normalizeArgs(rawArgs)
+      try {
+        return await runGenerate(args, {
+          cwd: sessionCwd(exec),
+          config,
+          signal: exec?.signal,
+        })
+      } catch (error) {
+        const message = `❌ 出图失败：${error?.message || error}`
+        return {
+          ok: false,
+          message,
+          markdown: '',
+          files: [],
+          model: String(args.model || 'gpt-image-2.6-exact'),
+          elapsed_ms: 0,
+          balance_after: -1,
+        }
+      }
+    },
+  }
+}
+
+/** 信息查询工具定义。 */
+function infoToolDefinition(config) {
+  return {
+    name: 'image_gen_info',
+    description: [
+      'Check the aipais image relay: remaining credits, available models with size tiers, and the capability table (aspect ratios, output formats, gif/svg notes, reference edits, price).',
+      'Free to call (no image is generated). Use it when the user asks what the image tool can do, which formats are supported, or how much credit is left.',
+    ].join(' '),
+    parameters: INFO_SCHEMA,
+    output: {
+      schema: INFO_OUTPUT,
+      render: (_args, value) => [{ type: 'text', text: String(value?.message || '') }],
+    },
+    async execute(_rawArgs, exec) {
+      try {
+        return await runInfo({}, { config, signal: exec?.signal })
+      } catch (error) {
+        return {
+          ok: false,
+          message: `❌ 查询失败：${error?.message || error}`,
+          balance: -1,
+          models: [],
+        }
+      }
+    },
+  }
+}
+
+/**
+ * 注册工具。Cordis 在 apply 前已按 inject 解析好 ctx.tools。
+ * @param {import('@deepseek-ai/cordis').Context} ctx
+ * @param {object} config bundle patch 里的 config
+ */
+export function apply(ctx, config = {}) {
+  const register = (definition) => {
+    if (typeof ctx.tools?.register !== 'function') {
+      console.warn(`[dsh-aipais-image] tools registry unavailable, skip ${definition.name}`)
+      return
+    }
+    try {
+      ctx.tools.register(definition)
+    } catch (error) {
+      console.warn(`[dsh-aipais-image] failed to register ${definition.name}:`, error)
+    }
+  }
+  register(generateToolDefinition(config))
+  register(infoToolDefinition(config))
+}

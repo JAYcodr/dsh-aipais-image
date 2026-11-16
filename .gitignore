@@ -1,0 +1,16 @@
+# 依赖与构建产物
+node_modules/
+*.tgz
+
+# 本地密钥与生成结果
+.aipais.env
+.env
+.env.*
+!.env.example
+generate/
+*.zip
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+*.log
